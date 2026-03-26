@@ -5,10 +5,9 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers, KeyEventKind};
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
 
-use crate::agent::r#loop::{AgentEvent, AgentLoop};
+use crate::agent::handle::AgentHandle;
+use crate::agent::r#loop::AgentEvent;
 use crate::config::Settings;
-use crate::llm::capabilities::ModelCapabilities;
-use crate::llm::client::OllamaClient;
 use crate::tui::chat::{ChatMessage, render_chat, render_approval};
 use crate::tui::input::{InputState, SlashCommand, parse_slash_command, render_input};
 use crate::tui::layout::{main_layout, approval_overlay};
@@ -24,7 +23,7 @@ struct PendingApproval {
 
 /// Main application state
 pub struct App {
-    agent: AgentLoop,
+    agent: AgentHandle,
     messages: Vec<ChatMessage>,
     input: InputState,
     state: AppState,
@@ -39,20 +38,8 @@ pub struct App {
 
 impl App {
     pub async fn new(settings: Settings, working_dir: PathBuf) -> Result<Self> {
-        let client = OllamaClient::new(&settings.ollama_url);
-
-        // Health check
-        if let Err(e) = client.health_check().await {
-            eprintln!("Warning: Cannot connect to Ollama at {}: {}", settings.ollama_url, e);
-            eprintln!("Make sure Ollama is running. Continuing anyway...");
-        }
-
-        // Detect model capabilities
-        let capabilities = ModelCapabilities::detect(&client, &settings.default_model).await
-            .unwrap_or_else(|_| ModelCapabilities::fallback(&settings.default_model));
-        let model_name = capabilities.model_name.clone();
-
-        let agent = AgentLoop::new(client, capabilities, settings, working_dir);
+        let agent = AgentHandle::spawn(settings, working_dir).await?;
+        let model_name = agent.model_name().to_string();
 
         let mut app = Self {
             agent,
@@ -257,10 +244,13 @@ impl App {
                 match code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                         self.state = AppState::ToolExec;
-                        let result = self.agent.execute_approved_action(
-                            &approval.tool_name,
-                            &approval.arguments,
-                        ).await;
+                        let result = self.agent.execute_approved(
+                            approval.tool_name.clone(),
+                            approval.arguments.clone(),
+                        ).await
+                            .unwrap_or_else(|e| {
+                                crate::tools::types::ToolResult::Error(e.to_string())
+                            });
 
                         let (content, is_error) = match &result {
                             crate::tools::types::ToolResult::Success(s) => (s.clone(), false),
@@ -269,15 +259,15 @@ impl App {
                         };
 
                         self.messages.push(ChatMessage::tool(&approval.tool_name, &content, is_error));
-                        self.agent.add_tool_result_and_continue(&approval.tool_name, &content);
+                        self.agent.add_tool_result(approval.tool_name.clone(), content);
 
                         // Continue the agent loop
                         self.spawn_agent_continuation();
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') => {
-                        self.agent.add_tool_result_and_continue(
-                            &approval.tool_name,
-                            "DENIED: User rejected this action.",
+                        self.agent.add_tool_result(
+                            approval.tool_name.clone(),
+                            "DENIED: User rejected this action.".to_string(),
                         );
                         self.messages.push(ChatMessage::system("Action denied."));
                         self.spawn_agent_continuation();
@@ -309,14 +299,13 @@ impl App {
                     return Ok(());
                 }
 
-                // Send to agent
+                // Send to agent (non-blocking — runs in background task)
                 self.messages.push(ChatMessage::user(&text));
                 self.scroll_offset = 0;
                 self.state = AppState::Thinking;
 
-                let (tx, rx) = mpsc::unbounded_channel();
+                let rx = self.agent.send_message(text);
                 self.event_rx = Some(rx);
-                self.agent.process_message(&text, tx).await;
             }
             (KeyCode::Backspace, _) => self.input.delete_char(),
             (KeyCode::Delete, _) => self.input.delete_forward(),
@@ -373,15 +362,16 @@ impl App {
             SlashCommand::Save => {
                 let data_dir = crate::config::Settings::data_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from(".enki"));
-                match self.agent.conversation().save(&data_dir) {
-                    Ok(()) => self.messages.push(ChatMessage::system(
-                        "Session saved."
-                    )),
-                    Err(e) => self.messages.push(ChatMessage::error(&format!(
-                        "Failed to save: {}",
-                        e
-                    ))),
-                }
+                let agent = self.agent.clone();
+                let messages = &mut self.messages;
+                // Spawn a task so we don't block the UI
+                let (tx, _rx) = mpsc::channel::<std::result::Result<(), String>>(1);
+                tokio::spawn(async move {
+                    let result = agent.save_conversation(data_dir).await;
+                    let _ = tx.send(result.map_err(|e| e.to_string())).await;
+                });
+                // We'll show a message immediately; the save happens asynchronously
+                messages.push(ChatMessage::system("Saving session..."));
             }
             SlashCommand::Quit => {
                 self.should_quit = true;

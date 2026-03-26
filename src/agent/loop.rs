@@ -11,7 +11,7 @@ use crate::llm::types::*;
 use crate::tools::ToolRegistry;
 
 /// Events emitted by the agent loop for the TUI to render
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {
     /// Streaming text from the assistant
     TextDelta(String),

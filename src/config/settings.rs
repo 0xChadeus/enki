@@ -26,7 +26,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ollama_url: "http://127.0.0.1:11434".to_string(),
-            default_model: "qwen2.5-coder:7b".to_string(),
+            default_model: "qwen3.5:27b".to_string(),
             max_iterations: 25,
             auto_approve_reads: true,
             context_reserve_tokens: 4096,
