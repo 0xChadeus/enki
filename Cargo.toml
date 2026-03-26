@@ -1,0 +1,61 @@
+[package]
+name = "enki"
+version = "0.1.0"
+edition = "2021"
+description = "Local AI coding agent powered by Ollama"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Syntax highlighting
+syntect = "5"
+
+# File traversal
+walkdir = "2"
+ignore = "0.4"
+glob = "0.3"
+
+# Diff generation
+similar = { version = "2", features = ["inline"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Regex for search
+regex = "1"
+
+# Config
+toml = "0.8"
+dirs = "6"
+
+# Unique IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async trait
+async-trait = "0.1"
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"
